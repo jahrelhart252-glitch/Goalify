@@ -491,7 +491,7 @@ export function validateConfig(config) {
   }
 
   if (!process.env.DISCORD_TOKEN && !process.env.TOKEN) {
-    errors.push("Bot token is required (DISCORD_TOKEN or TOKEN environment variable)");
+    errors.push("MTUyMTcwMTQwOTA2ODY4MzM3NQ.GgjwbD.HxfjwiJP80tTrX7okzubwhD-NpaJukkbxm7ls0)");
   }
 
   if (!process.env.CLIENT_ID) {
@@ -649,3 +649,40 @@ export function getRandomColor() {
 }
 
 export default botConfig;
+
+
+
+SlashCommandBuilder,
+  ActionRowBuilder,
+  StringSelectMenuBuilder,
+} = require('discord.js');
+const { buildLeaderboardEmbed, CATEGORIES } = require('../utils/embeds');
+
+function buildSelectRow(selected) {
+  const menu = new StringSelectMenuBuilder()
+    .setCustomId('leaderboard_select')
+    .setPlaceholder('Select another category:')
+    .addOptions(
+      Object.entries(CATEGORIES).map(([value, info]) => ({
+        label: info.label,
+        value,
+        default: value === selected,
+      }))
+    );
+  return new ActionRowBuilder().addComponents(menu);
+}
+
+module.exports = {
+  data: new SlashCommandBuilder()
+    .setName('leaderboard')
+    .setDescription('Show the server leaderboard'),
+
+  async execute(interaction) {
+    const defaultCategory = 'mmr';
+    const embed = buildLeaderboardEmbed(defaultCategory);
+    const row = buildSelectRow(defaultCategory);
+    await interaction.reply({ embeds: [embed], components: [row] });
+  },
+
+  buildSelectRow, // exported so index.js can reuse it when handling the dropdown
+};
