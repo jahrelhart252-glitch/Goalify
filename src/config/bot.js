@@ -651,38 +651,415 @@ export function getRandomColor() {
 export default botConfig;
 
 
+```js
 const {
-  SlashCommandBuilder,
-  ActionRowBuilder,
-  StringSelectMenuBuilder,
-} = require('discord.js');
-const { buildLeaderboardEmbed, CATEGORIES } = require('../utils/embeds');
+    Client,
+    GatewayIntentBits,
+    SlashCommandBuilder,
+    REST,
+    Routes,
+    EmbedBuilder
+} = require("discord.js");
 
-function buildSelectRow(selected) {
-  const menu = new StringSelectMenuBuilder()
-    .setCustomId('leaderboard_select')
-    .setPlaceholder('Select another category:')
-    .addOptions(
-      Object.entries(CATEGORIES).map(([value, info]) => ({
-        label: info.label,
-        value,
-        default: value === selected,
-      }))
-    );
-  return new ActionRowBuilder().addComponents(menu);
+const fs = require("fs");
+
+// =====================================================
+// CONFIG
+// =====================================================
+
+const TOKEN = process.env.DISCORD_TOKEN || "YOUR_BOT_TOKEN";
+const CLIENT_ID = process.env.CLIENT_ID || "YOUR_CLIENT_ID";
+const GUILD_ID = process.env.GUILD_ID || "YOUR_GUILD_ID";
+
+const DATA_FILE = "./players.json";
+
+// =====================================================
+// DATABASE
+// =====================================================
+
+function loadPlayers() {
+    if (!fs.existsSync(DATA_FILE)) {
+        fs.writeFileSync(DATA_FILE, JSON.stringify({}, null, 4));
+    }
+
+    return JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
 }
 
-module.exports = {
-  data: new SlashCommandBuilder()
-    .setName('leaderboard')
-    .setDescription('Show the server leaderboard'),
+function savePlayers(players) {
+    fs.writeFileSync(DATA_FILE, JSON.stringify(players, null, 4));
+}
 
-  async execute(interaction) {
-    const defaultCategory = 'mmr';
-    const embed = buildLeaderboardEmbed(defaultCategory);
-    const row = buildSelectRow(defaultCategory);
-    await interaction.reply({ embeds: [embed], components: [row] });
-  },
+let players = loadPlayers();
 
-  buildSelectRow, // exported so index.js can reuse it when handling the dropdown
-};
+// =====================================================
+// DISCORD CLIENT
+// =====================================================
+
+const client = new Client({
+    intents: [
+        GatewayIntentBits.Guilds
+    ]
+});
+
+// =====================================================
+// SLASH COMMANDS
+// =====================================================
+
+const commands = [
+
+    new SlashCommandBuilder()
+        .setName("leaderboard")
+        .setDescription("Show the player leaderboard")
+        .addStringOption(option =>
+            option
+                .setName("sort")
+                .setDescription("Choose what to sort the leaderboard by")
+                .setRequired(false)
+                .addChoices(
+                    { name: "MMR", value: "mmr" },
+                    { name: "Wins", value: "wins" },
+                    { name: "Steals", value: "steals" },
+                    { name: "Goals", value: "goals" },
+                    { name: "Point Differential", value: "pointDiff" },
+                    { name: "Games Played", value: "games" }
+                )
+        ),
+
+    new SlashCommandBuilder()
+        .setName("stats")
+        .setDescription("View a player's stats")
+        .addUserOption(option =>
+            option
+                .setName("player")
+                .setDescription("Player to look up")
+                .setRequired(true)
+        ),
+
+    new SlashCommandBuilder()
+        .setName("addstats")
+        .setDescription("Add stats to a player")
+        .addUserOption(option =>
+            option
+                .setName("player")
+                .setDescription("Player")
+                .setRequired(true)
+        )
+        .addIntegerOption(option =>
+            option.setName("mmr").setDescription("MMR change").setRequired(false)
+        )
+        .addIntegerOption(option =>
+            option.setName("steals").setDescription("Steals").setRequired(false)
+        )
+        .addIntegerOption(option =>
+            option.setName("wins").setDescription("Wins").setRequired(false)
+        )
+        .addIntegerOption(option =>
+            option.setName("pointdiff").setDescription("Point differential").setRequired(false)
+        )
+        .addIntegerOption(option =>
+            option.setName("games").setDescription("Games played").setRequired(false)
+        )
+        .addIntegerOption(option =>
+            option.setName("goals").setDescription("Goals").setRequired(false)
+        ),
+
+    new SlashCommandBuilder()
+        .setName("setstats")
+        .setDescription("Set a player's stats")
+        .addUserOption(option =>
+            option
+                .setName("player")
+                .setDescription("Player")
+                .setRequired(true)
+        )
+        .addIntegerOption(option =>
+            option.setName("mmr").setDescription("MMR").setRequired(true)
+        )
+        .addIntegerOption(option =>
+            option.setName("steals").setDescription("Steals").setRequired(true)
+        )
+        .addIntegerOption(option =>
+            option.setName("wins").setDescription("Wins").setRequired(true)
+        )
+        .addIntegerOption(option =>
+            option.setName("pointdiff").setDescription("Point differential").setRequired(true)
+        )
+        .addIntegerOption(option =>
+            option.setName("games").setDescription("Games played").setRequired(true)
+        )
+        .addIntegerOption(option =>
+            option.setName("goals").setDescription("Goals").setRequired(true)
+        )
+].map(command => command.toJSON());
+
+// =====================================================
+// REGISTER COMMANDS
+// =====================================================
+
+const rest = new REST({ version: "10" }).setToken(TOKEN);
+
+async function registerCommands() {
+    try {
+        console.log("Registering slash commands...");
+
+        await rest.put(
+            Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
+            { body: commands }
+        );
+
+        console.log("Slash commands registered!");
+    } catch (error) {
+        console.error(error);
+    }
+}
+
+// =====================================================
+// PLAYER DATABASE FUNCTIONS
+// =====================================================
+
+function createPlayer(user) {
+    if (!players[user.id]) {
+        players[user.id] = {
+            id: user.id,
+            name: user.username,
+            mmr: 1000,
+            steals: 0,
+            wins: 0,
+            pointDiff: 0,
+            games: 0,
+            goals: 0
+        };
+
+        savePlayers(players);
+    }
+
+    // Keep username updated
+    players[user.id].name = user.username;
+
+    return players[user.id];
+}
+
+// =====================================================
+// BOT READY
+// =====================================================
+
+client.once("ready", async () => {
+    console.log(`Logged in as ${client.user.tag}`);
+
+    await registerCommands();
+
+    console.log("Leaderboard bot is online!");
+});
+
+// =====================================================
+// COMMAND HANDLER
+// =====================================================
+
+client.on("interactionCreate", async interaction => {
+
+    if (!interaction.isChatInputCommand()) return;
+
+    // -------------------------------------------------
+    // /leaderboard
+    // -------------------------------------------------
+
+    if (interaction.commandName === "leaderboard") {
+
+        const sortBy =
+            interaction.options.getString("sort") || "mmr";
+
+        const allPlayers = Object.values(players);
+
+        if (allPlayers.length === 0) {
+            return interaction.reply(
+                "There are no players on the leaderboard yet."
+            );
+        }
+
+        allPlayers.sort((a, b) => b[sortBy] - a[sortBy]);
+
+        const medals = ["🥇", "🥈", "🥉"];
+
+        let leaderboard = "";
+
+        allPlayers.slice(0, 15).forEach((player, index) => {
+
+            const rank = medals[index] || `**${index + 1}.**`;
+
+            leaderboard +=
+                `${rank} **${player.name}**\n` +
+                `> 🏆 ${player.mmr} MMR  ` +
+                `🥷 ${player.steals} steals  ` +
+                `🏅 ${player.wins} wins\n` +
+                `> 📊 ${player.pointDiff >= 0 ? "+" : ""}${player.pointDiff} PD  ` +
+                `🎮 ${player.games} games  ` +
+                `⚽ ${player.goals} goals\n\n`;
+        });
+
+        const embed = new EmbedBuilder()
+            .setTitle("🏆 Player Leaderboard")
+            .setDescription(leaderboard)
+            .setColor(0xFFD700)
+            .setFooter({
+                text: `Sorted by ${sortBy === "pointDiff"
+                    ? "Point Differential"
+                    : sortBy.toUpperCase()}`
+            })
+            .setTimestamp();
+
+        return interaction.reply({
+            embeds: [embed]
+        });
+    }
+
+    // -------------------------------------------------
+    // /stats
+    // -------------------------------------------------
+
+    if (interaction.commandName === "stats") {
+
+        const user = interaction.options.getUser("player");
+
+        const player = createPlayer(user);
+
+        const winRate =
+            player.games > 0
+                ? ((player.wins / player.games) * 100).toFixed(1)
+                : "0.0";
+
+        const embed = new EmbedBuilder()
+            .setTitle(`📊 ${player.name}'s Stats`)
+            .setThumbnail(user.displayAvatarURL())
+            .setColor(0x3498DB)
+            .addFields(
+                {
+                    name: "🏆 MMR",
+                    value: `${player.mmr}`,
+                    inline: true
+                },
+                {
+                    name: "🏅 Wins",
+                    value: `${player.wins}`,
+                    inline: true
+                },
+                {
+                    name: "🥷 Steals",
+                    value: `${player.steals}`,
+                    inline: true
+                },
+                {
+                    name: "📈 Point Differential",
+                    value: `${player.pointDiff >= 0 ? "+" : ""}${player.pointDiff}`,
+                    inline: true
+                },
+                {
+                    name: "🎮 Games Played",
+                    value: `${player.games}`,
+                    inline: true
+                },
+                {
+                    name: "⚽ Goals",
+                    value: `${player.goals}`,
+                    inline: true
+                },
+                {
+                    name: "📊 Win Rate",
+                    value: `${winRate}%`,
+                    inline: true
+                }
+            )
+            .setTimestamp();
+
+        return interaction.reply({
+            embeds: [embed]
+        });
+    }
+
+    // -------------------------------------------------
+    // /addstats
+    // -------------------------------------------------
+
+    if (interaction.commandName === "addstats") {
+
+        const user = interaction.options.getUser("player");
+
+        const player = createPlayer(user);
+
+        const mmr = interaction.options.getInteger("mmr") || 0;
+        const steals = interaction.options.getInteger("steals") || 0;
+        const wins = interaction.options.getInteger("wins") || 0;
+        const pointDiff =
+            interaction.options.getInteger("pointdiff") || 0;
+        const games = interaction.options.getInteger("games") || 0;
+        const goals = interaction.options.getInteger("goals") || 0;
+
+        player.mmr += mmr;
+        player.steals += steals;
+        player.wins += wins;
+        player.pointDiff += pointDiff;
+        player.games += games;
+        player.goals += goals;
+
+        savePlayers(players);
+
+        return interaction.reply(
+            `✅ Updated **${player.name}**'s stats!\n\n` +
+            `🏆 MMR: ${player.mmr}\n` +
+            `🥷 Steals: ${player.steals}\n` +
+            `🏅 Wins: ${player.wins}\n` +
+            `📈 Point Differential: ${player.pointDiff >= 0 ? "+" : ""}${player.pointDiff}\n` +
+            `🎮 Games: ${player.games}\n` +
+            `⚽ Goals: ${player.goals}`
+        );
+    }
+
+    // -------------------------------------------------
+    // /setstats
+    // -------------------------------------------------
+
+    if (interaction.commandName === "setstats") {
+
+        const user = interaction.options.getUser("player");
+
+        const player = createPlayer(user);
+
+        player.mmr = interaction.options.getInteger("mmr");
+        player.steals = interaction.options.getInteger("steals");
+        player.wins = interaction.options.getInteger("wins");
+        player.pointDiff = interaction.options.getInteger("pointdiff");
+        player.games = interaction.options.getInteger("games");
+        player.goals = interaction.options.getInteger("goals");
+
+        savePlayers(players);
+
+        return interaction.reply(
+            `✅ Set stats for **${player.name}**!\n\n` +
+            `🏆 MMR: ${player.mmr}\n` +
+            `🥷 Steals: ${player.steals}\n` +
+            `🏅 Wins: ${player.wins}\n` +
+            `📈 Point Differential: ${player.pointDiff >= 0 ? "+" : ""}${player.pointDiff}\n` +
+            `🎮 Games: ${player.games}\n` +
+            `⚽ Goals: ${player.goals}`
+        );
+    }
+});
+
+// =====================================================
+// ERROR HANDLING
+// =====================================================
+
+process.on("unhandledRejection", error => {
+    console.error("Unhandled promise rejection:", error);
+});
+
+process.on("uncaughtException", error => {
+    console.error("Uncaught exception:", error);
+});
+
+// =====================================================
+// LOGIN
+// =====================================================
+
+client.login(TOKEN);
+```
+
