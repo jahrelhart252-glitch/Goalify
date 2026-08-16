@@ -33,3 +33,146 @@ module.exports = {
 
   buildSelectRow, // exported so index.js can reuse it when handling the dropdown
 };
+
+
+const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
+const { addStats, loadConfig, calculateMmr } = require('../utils/dataManager');
+
+module.exports = {
+  data: new SlashCommandBuilder()
+    .setName('update')
+    .setDescription('Host commands')
+    .addSubcommand((sub) =>
+      sub
+        .setName('leaderboard')
+        .setDescription('(Host only) Give a player stats and update their MMR')
+        .addUserOption((opt) =>
+          opt.setName('player').setDescription('The player to give stats to').setRequired(true)
+        )
+        .addIntegerOption((opt) =>
+          opt.setName('points').setDescription('Points to add')
+        )
+        .addIntegerOption((opt) =>
+          opt.setName('steals').setDescription('Steals to add').setMinValue(0)
+        )
+        .addIntegerOption((opt) =>
+          opt
+            .setName('point_difference')
+            .setDescription('Point differential for the game (can be negative)')
+        )
+        .addIntegerOption((opt) =>
+          opt.setName('wins').setDescription('Wins to add').setMinValue(0)
+        )
+        .addIntegerOption((opt) =>
+          opt.setName('losses').setDescription('Losses to add').setMinValue(0)
+        )
+    ),
+
+  async execute(interaction) {
+    const config = loadConfig();
+
+    // Permission check: must have the configured Host role
+    const hostRoleName = (config.hostRoleName || 'Host').toLowerCase();
+    const hasHostRole = interaction.member.roles.cache.some(
+      (r) => r.name.toLowerCase() === hostRoleName
+    );
+    const isAdmin = interaction.member.permissions.has('Administrator');
+
+    if (!hasHostRole && !isAdmin) {
+      return interaction.reply({
+        content: `You need the **${config.hostRoleName}** role to use this command.`,
+        ephemeral: true,
+      });
+    }
+
+    const player = interaction.options.getUser('player');
+    const points = interaction.options.getInteger('points') || 0;
+    const steals = interaction.options.getInteger('steals') || 0;
+    const pointDifference = interaction.options.getInteger('point_difference') || 0;
+    const wins = interaction.options.getInteger('wins') || 0;
+    const losses = interaction.options.getInteger('losses') || 0;
+
+    if (
+      points === 0 &&
+      steals === 0 &&
+      pointDifference === 0 &&
+      wins === 0 &&
+      losses === 0
+    ) {
+      return interaction.reply({
+        content: 'You need to give at least one stat value.',
+        ephemeral: true,
+      });
+    }
+
+    const record = addStats(player.id, player.username, {
+      points,
+      steals,
+      pointDifference,
+      wins,
+      losses,
+    });
+    const mmrChange = calculateMmr(
+      points,
+      steals,
+      pointDifference,
+      wins,
+      losses,
+      config.mmrWeights
+    );
+
+    const sign = mmrChange >= 0 ? '+' : '';
+    const changeLines = [
+      points ? `${points >= 0 ? '+' : ''}${points} Points` : null,
+      steals ? `+${steals} Steals` : null,
+      pointDifference ? `${pointDifference >= 0 ? '+' : ''}${pointDifference} Point Difference` : null,
+      wins ? `+${wins} Wins` : null,
+      losses ? `+${losses} Losses` : null,
+    ].filter(Boolean);
+
+    const confirmEmbed = new EmbedBuilder()
+      .setColor(mmrChange >= 0 ? 0x2ecc71 : 0xe74c3c)
+      .setTitle('Leaderboard Updated')
+      .setDescription(
+        `Gave **${player.username}**:\n` +
+          changeLines.join('\n') +
+          `\n**${sign}${mmrChange} MMR**\n\n` +
+          `New totals — Points: **${record.points}**, Steals: **${record.steals}**, ` +
+          `Point Diff: **${record.pointDifference}**, Wins: **${record.wins}**, Losses: **${record.losses}**, ` +
+          `MMR: **${record.mmr}**`
+      )
+      .setTimestamp();
+
+    await interaction.reply({ embeds: [confirmEmbed] });
+
+    // Log it, if a logs channel is configured
+    if (config.logsChannelId) {
+      const logChannel = await interaction.client.channels
+        .fetch(config.logsChannelId)
+        .catch(() => null);
+      if (logChannel) {
+        const logEmbed = new EmbedBuilder()
+          .setColor(0x9b59b6)
+          .setTitle('Leaderboard Update Log')
+          .addFields(
+            { name: 'Host', value: `<@${interaction.user.id}>`, inline: true },
+            { name: 'Player', value: `<@${player.id}>`, inline: true },
+            {
+              name: 'Given',
+              value:
+                `Points: ${points} | Steals: ${steals} | Point Diff: ${pointDifference} | ` +
+                `Wins: ${wins} | Losses: ${losses} | MMR: ${sign}${mmrChange}`,
+            },
+            {
+              name: 'New Totals',
+              value:
+                `Points: ${record.points} | Steals: ${record.steals} | Point Diff: ${record.pointDifference} | ` +
+                `Wins: ${record.wins} | Losses: ${record.losses} | MMR: ${record.mmr}`,
+            }
+          )
+          .setTimestamp();
+        await logChannel.send({ embeds: [logEmbed] }).catch(() => null);
+      }
+    }
+  },
+};
