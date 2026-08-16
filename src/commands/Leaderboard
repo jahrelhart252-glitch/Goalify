@@ -21,7 +21,7 @@ function buildSelectRow(selected) {
 
 module.exports = {
   data: new SlashCommandBuilder()
-    .setName('leaderboard')
+    .setName('Tournament leaderboard')
     .setDescription('Show the server leaderboard'),
 
   async execute(interaction) {
@@ -44,7 +44,7 @@ module.exports = {
     .setDescription('Host commands')
     .addSubcommand((sub) =>
       sub
-        .setName('leaderboard')
+        .setName('set stats')
         .setDescription('(Host only) Give a player stats and update their MMR')
         .addUserOption((opt) =>
           opt.setName('player').setDescription('The player to give stats to').setRequired(true)
